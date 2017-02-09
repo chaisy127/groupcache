@@ -23,6 +23,7 @@ import (
 	"strconv"
 )
 
+// 一致性哈希函数，如果想要实现自定义的哈希函数，一定要满足该类型
 type Hash func(data []byte) uint32
 
 type Map struct {
@@ -32,6 +33,9 @@ type Map struct {
 	hashMap  map[int]string
 }
 
+// replicas值是为了使服务节点更加分散，以使key值可以更加均匀的分布到各个服务节点上
+// replicas值默认为50，由http.go文件中的defaultReplicas指定
+// 默认的哈希函数为crc32.ChecksumIEEE，详见https://golang.org/pkg/hash/crc32/#ChecksumIEEE
 func New(replicas int, fn Hash) *Map {
 	m := &Map{
 		replicas: replicas,
@@ -45,11 +49,13 @@ func New(replicas int, fn Hash) *Map {
 }
 
 // Returns true if there are no items available.
+// 判断服务节点个数是否为0
 func (m *Map) IsEmpty() bool {
 	return len(m.keys) == 0
 }
 
 // Adds some keys to the hash.
+// 增加服务节点到哈希环中，keys的值一般为http://ip:port，如果port为空，则默认使用80端口
 func (m *Map) Add(keys ...string) {
 	for _, key := range keys {
 		for i := 0; i < m.replicas; i++ {
@@ -62,6 +68,7 @@ func (m *Map) Add(keys ...string) {
 }
 
 // Gets the closest item in the hash to the provided key.
+// 对key值进行哈希函数计算，并根据一致性哈希原理，得到负责保存key值的服务节点
 func (m *Map) Get(key string) string {
 	if m.IsEmpty() {
 		return ""
