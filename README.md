@@ -1,73 +1,59 @@
-# groupcache
+# groupcache中文注释
 
-## Summary
+## 摘要
 
-groupcache is a caching and cache-filling library, intended as a
-replacement for memcached in many cases.
+groupcache是一个缓存及缓存过滤库，作为 memcached 许多场景下的替代版本
 
-For API docs and examples, see http://godoc.org/github.com/golang/groupcache
+API文档和例子详见http://godoc.org/github.com/golang/groupcache
 
-## Comparison to memcached
+## 对比memcached
 
-### **Like memcached**, groupcache:
+### **与memcached相同的地方**:
 
- * shards by key to select which peer is responsible for that key
+ * 通过key分片，并且通过key来查询响应的peer
 
-### **Unlike memcached**, groupcache:
+### **与memcached不同的地方**:
 
- * does not require running a separate set of servers, thus massively
-   reducing deployment/configuration pain.  groupcache is a client
-   library as well as a server.  It connects to its own peers.
+ * 不需要对服务器进行单独的设置，这将大幅度减少部署和配置的工作量。
+   groupcache既是客户端库也是服务器库，并连接到自己的peer上。
 
- * comes with a cache filling mechanism.  Whereas memcached just says
-   "Sorry, cache miss", often resulting in a thundering herd of
-   database (or whatever) loads from an unbounded number of clients
-   (which has resulted in several fun outages), groupcache coordinates
-   cache fills such that only one load in one process of an entire
-   replicated set of processes populates the cache, then multiplexes
-   the loaded value to all callers.
+ * 具有缓存过滤机制。
+   众所周知，在memcached出现“Sorry，cache miss（缓存丢失）”时，
+   经常会因为不受控制用户数量的请求而导致数据库（或者其它组件）产生“惊群效应（thundering herd）”；
+   groupcache会协调缓存填充，只会将重复调用中的一个放于缓存，而处理结果将发送给所有相同的调用者。
 
- * does not support versioned values.  If key "foo" is value "bar",
-   key "foo" must always be "bar".  There are neither cache expiration
-   times, nor explicit cache evictions.  Thus there is also no CAS,
-   nor Increment/Decrement.  This also means that groupcache....
+ * 不支持多个版本的值。
+   如果“foo”键对应的值是“bar”，那么键“foo”的值永远都是“bar”。
+   这里既没有缓存的有效期，也没有明确的缓存回收机制，因此同样也没有CAS或者Increment/Decrement。
 
- * ... supports automatic mirroring of super-hot items to multiple
-   processes.  This prevents memcached hot spotting where a machine's
-   CPU and/or NIC are overloaded by very popular keys/values.
+ * ... 基于上一点的改变，groupcache 就具备了自动备份“超热”项进行多重处理，
+   这就避免了 memcached 中对某些键值过量访问而造成所在机器 CPU 或者 NIC 过载。
 
- * is currently only available for Go.  It's very unlikely that I
-   (bradfitz@) will port the code to any other language.
+ * 当前只支持Go语言。我(bradfitz@)不太可能实现所有语言的接口代码
 
-## Loading process
+## 运行机制
 
-In a nutshell, a groupcache lookup of **Get("foo")** looks like:
+简而言之，groupcache查找一个Get（“foo”）的过程类似下面的情景
 
-(On machine #5 of a set of N machines running the same code)
+（机器#5上，它是运行相同代码N台机器集中的一台）：
 
- 1. Is the value of "foo" in local memory because it's super hot?  If so, use it.
+ 1. key“foo”的值是否会因为“过热”而储存在本地内存，如果是，就直接使用。
 
- 2. Is the value of "foo" in local memory because peer #5 (the current
-    peer) is the owner of it?  If so, use it.
+ 2. key“foo”的值是否会因为peer #5是其拥有者而储存在本地内存，如果是，就直接使用。
 
- 3. Amongst all the peers in my set of N, am I the owner of the key
-    "foo"?  (e.g. does it consistent hash to 5?)  If so, load it.  If
-    other callers come in, via the same process or via RPC requests
-    from peers, they block waiting for the load to finish and get the
-    same answer.  If not, RPC to the peer that's the owner and get
-    the answer.  If the RPC fails, just load it locally (still with
-    local dup suppression).
+ 3. 首先确定key “fool”是否归属自己N个机器集合的peer中，
+    如果是，就直接加载。如果有其它的调用者介入（通过相同的进程或者是peer的RPC请求，
+    这些请求将会被阻塞，而处理结束后，他们将直接获得相同的结果）。
+    如果不是，将key的所有者RPC到相应的peer。如果RPC失败，那么直接在本地加载（仍然通过备份来应对负载）。
 
-## Users
+## 用户
 
-groupcache is in production use by dl.google.com (its original user),
-parts of Blogger, parts of Google Code, parts of Google Fiber, parts
-of Google production monitoring systems, etc.
+groupcache已经在dl.Google.com、Blogger、Google Code、Google Fiber、Google生产监视系统等项目中投入使用。
 
-## Presentations
+## 演示
 
-See http://talks.golang.org/2013/oscon-dl.slide
+见http://talks.golang.org/2013/oscon-dl.slide
 
-## Help
+## 帮助
 
-Use the golang-nuts mailing list for any discussion or questions.
+在golang-nuts邮件列表中讨论或者提问。
