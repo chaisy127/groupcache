@@ -37,6 +37,11 @@ import (
 )
 
 // A Getter loads data for a key.
+// 该接口类型是NewGroup函数的第三个参数
+// 主要用于在未命中本地缓存且key是属于本地负责缓存的时候，从指定地方获取key对应的value的方法
+// “指定地方”包括数据库、http api接口等等
+// 例如，想要从mongodb中获取key对应的value，则需要自己实现从mongodb中读取key对应的value的方法
+// key和value的对应关系比较灵活，比如在CDN中，key可以是一条URL，value则是该URL对应的网页等资源
 type Getter interface {
 	// Get returns the value identified by key, populating dest.
 	//
@@ -48,6 +53,8 @@ type Getter interface {
 }
 
 // A GetterFunc implements Getter with a function.
+// 在实际使用过程中，该类型用于将NewGroup函数的第三个参数getter进行强制类型转换
+// 进行强制类型转换后，则用户自定义的函数就已经实现了Getter接口
 type GetterFunc func(ctx Context, key string, dest Sink) error
 
 func (f GetterFunc) Get(ctx Context, key string, dest Sink) error {
@@ -59,7 +66,8 @@ var (
 	groups = make(map[string]*Group)
 
 	initPeerServerOnce sync.Once
-	initPeerServer     func()
+	// 千万不要对该类型感到困惑，func()其实就是一个无参数且无返回值的函数类型
+	initPeerServer func()
 )
 
 // GetGroup returns the named group previously created with NewGroup, or
@@ -91,6 +99,8 @@ func newGroup(name string, cacheBytes int64, getter Getter, peers PeerPicker) *G
 	}
 	mu.Lock()
 	defer mu.Unlock()
+	// 调用initPeerServer函数，该函数的类型为func
+	// initPeerServer默认为nil，可在调用NewGroup函数之前，通过调用RegisterServerStart进行注册
 	initPeerServerOnce.Do(callInitPeerServer)
 	if _, dup := groups[name]; dup {
 		panic("duplicate registration of group " + name)
@@ -205,6 +215,7 @@ func (g *Group) initPeers() {
 func (g *Group) Get(ctx Context, key string, dest Sink) error {
 	g.peersOnce.Do(g.initPeers)
 	g.Stats.Gets.Add(1)
+	// dest是一个带外参数，所以不能为空
 	if dest == nil {
 		return errors.New("groupcache: nil dest Sink")
 	}
@@ -233,6 +244,7 @@ func (g *Group) Get(ctx Context, key string, dest Sink) error {
 // load loads key either by invoking the getter locally or by sending it to another machine.
 func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPopulated bool, err error) {
 	g.Stats.Loads.Add(1)
+	// 该函数可以避免惊群效应，详情见singleflight/singleflight.go
 	viewi, err := g.loadGroup.Do(key, func() (interface{}, error) {
 		// Check the cache again because singleflight can only dedup calls
 		// that overlap concurrently.  It's possible for 2 concurrent
@@ -262,6 +274,8 @@ func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPo
 		g.Stats.LoadsDeduped.Add(1)
 		var value ByteView
 		var err error
+		// 根据一致性哈希，通过key值获取到对该key进行缓存的peer对象
+		// 如果获取到peer对象，则调用RPC，从指定的peer中获取key对应的value
 		if peer, ok := g.peers.PickPeer(key); ok {
 			value, err = g.getFromPeer(ctx, peer, key)
 			if err == nil {
@@ -274,6 +288,10 @@ func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPo
 			// probably boring (normal task movement), so not
 			// worth logging I imagine.
 		}
+		// 如果从peer中获取缓存数据失败，则在本地调用NewGroup函数的第三个参数getter指定的函数
+		// 以获取key对应的value
+		// 此时，一致性哈希算法无效，发生该情况的原因一般是peer不可用
+		// 该方法是为了在peer不可用的时候，仍能获取到key对应的value
 		value, err = g.getLocally(ctx, key, dest)
 		if err != nil {
 			g.Stats.LocalLoadErrs.Add(1)
@@ -281,6 +299,7 @@ func (g *Group) load(ctx Context, key string, dest Sink) (value ByteView, destPo
 		}
 		g.Stats.LocalLoads.Add(1)
 		destPopulated = true // only one caller of load gets this return value
+		// 将获取到的value存储到本地缓存中
 		g.populateCache(key, value, &g.mainCache)
 		return value, nil
 	})
@@ -322,10 +341,13 @@ func (g *Group) lookupCache(key string) (value ByteView, ok bool) {
 	if g.cacheBytes <= 0 {
 		return
 	}
+	// 从本地缓存中查找key对应的value
+	// 该函数本质上调用的是lru.go文件中的Get函数
 	value, ok = g.mainCache.get(key)
 	if ok {
 		return
 	}
+	// 从热门数据中查找key对应的value
 	value, ok = g.hotCache.get(key)
 	return
 }
@@ -409,6 +431,10 @@ func (c *cache) add(key string, value ByteView) {
 	defer c.mu.Unlock()
 	if c.lru == nil {
 		c.lru = &lru.Cache{
+			// 该回调函数有一个bug，会导致c.nbytes和c.nevict的值不准确
+			// c.nevict用于记录释放缓存的次数
+			// c.nbytes用于记录cache结构已使用了多少内存，这就会导致实际使用的内存和c.nbytes值不符
+			// 严重了会导致服务器的内存用尽，最后导致程序异常退出
 			OnEvicted: func(key lru.Key, value interface{}) {
 				val := value.(ByteView)
 				c.nbytes -= int64(len(key.(string))) + int64(val.Len())
